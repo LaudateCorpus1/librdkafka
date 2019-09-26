@@ -48,6 +48,9 @@ class BrokerMetadataImpl : public BrokerMetadata {
 
   const std::string host() const {return host_;}
   int port() const {return broker_metadata_->port;}
+  const std::string rack() const {
+    return rd_kafka_metadata_broker_rack(broker_metadata_);
+  }
 
   virtual ~BrokerMetadataImpl() {}
 

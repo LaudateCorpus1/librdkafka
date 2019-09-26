@@ -193,8 +193,33 @@ rd_kafka_metadata_copy (const struct rd_kafka_metadata *src, size_t size) {
 	return md;
 }
 
+#define MAX_BROKER_HOST_LEN 255
+
+/**
+ * @brief Private broker information for ABI compatibility
+ *
+ * This struct can be written into the memory pointed to by the public
+ * rd_kafka_metadata_broker struct's host field and still maintain binary
+ * compatibility with programs compiled against versions of the library
+ * expecting a char* host string since the bytes are stored directly in the
+ * struct as char array.
+ */
+typedef struct rd_kafka_metadata_broker_private {
+        char    host[MAX_BROKER_HOST_LEN+1];    /**< Broker hostname */
+        char    *rack;                          /**< Broker rack */
+} rd_kafka_metadata_broker_private_t;
 
 
+const char *rd_kafka_metadata_broker_rack(const rd_kafka_metadata_broker_t *mdb) {
+        rd_kafka_metadata_broker_private_t *mdb_priv;
+
+        if (!mdb || !mdb->host) {
+                return NULL;
+        }
+
+        mdb_priv = (rd_kafka_metadata_broker_private_t *) mdb->host;
+        return mdb_priv->rack;
+}
 
 /**
  * @brief Handle a Metadata response message.
@@ -230,6 +255,8 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
         int32_t controller_id = -1;
         rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR_NO_ERROR;
         int broadcast_changes = 0;
+        int broker_cnt = 0;
+        size_t tmpabuf_size = 0;
 
         rd_kafka_assert(NULL, thrd_is_current(rk->rk_thread));
 
@@ -240,10 +267,18 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
 
         rd_kafka_broker_lock(rkb);
         rkb_namelen = strlen(rkb->rkb_name)+1;
+        // read broker count first so we know how much memory to allocate
+        rd_kafka_buf_read_i32a(rkbuf, broker_cnt);
         /* We assume that the marshalled representation is
-         * no more than 4 times larger than the wire representation. */
+         * no more than 4 times larger than the wire representation.
+         * Also allocate some extra memory for the host string. */
+        tmpabuf_size = sizeof(*md) + rkb_namelen + (rkbuf->rkbuf_totlen * 4);
+        if (broker_cnt > 0) {
+                tmpabuf_size += (size_t) (broker_cnt * MAX_BROKER_HOST_LEN);
+        }
+
         rd_tmpabuf_new(&tbuf,
-                       sizeof(*md) + rkb_namelen + (rkbuf->rkbuf_totlen * 4),
+                       tmpabuf_size,
                        0/*dont assert on fail*/);
 
         if (!(md = rd_tmpabuf_alloc(&tbuf, sizeof(*md)))) {
@@ -257,7 +292,7 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
         rd_kafka_broker_unlock(rkb);
 
         /* Read Brokers */
-        rd_kafka_buf_read_i32a(rkbuf, md->broker_cnt);
+        md->broker_cnt = broker_cnt;
         if (md->broker_cnt > RD_KAFKAP_BROKERS_MAX)
                 rd_kafka_buf_parse_fail(rkbuf, "Broker_cnt %i > BROKERS_MAX %i",
                                         md->broker_cnt, RD_KAFKAP_BROKERS_MAX);
@@ -269,14 +304,33 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
                                         md->broker_cnt);
 
         for (i = 0 ; i < md->broker_cnt ; i++) {
+                rd_kafka_metadata_broker_private_t mdb = { .host = "", .rack = NULL };
+                rd_kafkap_str_t k_host_str = RD_ZERO_INIT;
+
                 rd_kafka_buf_read_i32a(rkbuf, md->brokers[i].id);
-                rd_kafka_buf_read_str_tmpabuf(rkbuf, &tbuf, md->brokers[i].host);
+                rd_kafka_buf_read_str(rkbuf, &k_host_str);
                 rd_kafka_buf_read_i32a(rkbuf, md->brokers[i].port);
 
                 if (ApiVersion >= 1) {
-                        rd_kafkap_str_t rack;
-                        rd_kafka_buf_read_str(rkbuf, &rack);
+                        // read rack string from buffer into tbuf and set rack field
+                        // of private broker metadata to point to this address
+                        rd_kafka_buf_read_str_tmpabuf(rkbuf, &tbuf, mdb.rack);
                 }
+
+                // copy host string into private broker metadata host field
+                if (k_host_str.len > MAX_BROKER_HOST_LEN) {
+                        rd_kafka_buf_parse_fail(rkbuf,
+                                                "broker host name \"%s\" too long: "
+                                                "max length [%"PRId32"]",
+                                                k_host_str.str,
+                                                MAX_BROKER_HOST_LEN);
+                } else if (k_host_str.len > 0) {
+                        strncpy(mdb.host, k_host_str.str, k_host_str.len);
+                }
+
+                // write contents of private broker metadata struct to tbuf and assign address
+                // to broker.host
+                md->brokers[i].host = rd_tmpabuf_write(&tbuf, (void *) &mdb, sizeof(mdb));
         }
 
         if (ApiVersion >= 2)
@@ -437,11 +491,13 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
 
         /* Update our list of brokers. */
         for (i = 0 ; i < md->broker_cnt ; i++) {
+                const char *rack = rd_kafka_metadata_broker_rack(&md->brokers[i]);
                 rd_rkb_dbg(rkb, METADATA, "METADATA",
-                           "  Broker #%i/%i: %s:%i NodeId %"PRId32,
+                           "  Broker #%i/%i: %s:%i (Rack: %s) NodeId %"PRId32,
                            i, md->broker_cnt,
                            md->brokers[i].host,
                            md->brokers[i].port,
+                           rack && strlen(rack) ? rack : "-",
                            md->brokers[i].id);
                 rd_kafka_broker_update(rkb->rkb_rk, rkb->rkb_proto,
                                        &md->brokers[i]);

@@ -3840,6 +3840,20 @@ typedef struct rd_kafka_metadata_broker {
         int         port;           /**< Broker listening port */
 } rd_kafka_metadata_broker_t;
 
+
+/**
+ * @brief Retrieves the rack identifier from the broker metadata.
+ *
+ * @returns the broker's rack string (null-terminated)
+ *
+ * @remarks this will only work for broker metadata initialized in
+ * a rd_kafka_metadata call.
+ *
+ */
+RD_EXPORT
+const char *rd_kafka_metadata_broker_rack(const rd_kafka_metadata_broker_t *mdb);
+
+
 /**
  * @brief Partition information
  */
