@@ -161,5 +161,9 @@ void rd_kafka_metadata_cache_destroy (rd_kafka_t *rk);
 int  rd_kafka_metadata_cache_wait_change (rd_kafka_t *rk, int timeout_ms);
 void rd_kafka_metadata_cache_dump (FILE *fp, rd_kafka_t *rk);
 
+void rd_kafka_metadata_broker_extra_init(rd_kafka_metadata_broker_t *mdb,
+                                         const char *host,
+                                         const char *rack);
+
 /**@}*/
 #endif /* _RDKAFKA_METADATA_H_ */
