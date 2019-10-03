@@ -221,7 +221,9 @@ void rd_kafka_metadata_broker_extra_init_tmpabuf(rd_tmpabuf_t *tab,
         mdb_extra = tab ? rd_tmpabuf_alloc(tab, sizeof(*mdb_extra))
                         : rd_calloc(sizeof(*mdb_extra), 1);
 
-        strncpy(mdb_extra->host, host, MAX_BROKER_HOST_LEN);
+        if (host)
+                strncpy(mdb_extra->host, host, MAX_BROKER_HOST_LEN);
+
         mdb_extra->rack = rack;
         mdb->host = (char *) mdb_extra;
 }
